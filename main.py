@@ -17,7 +17,7 @@ def setup_argparse():
     Sets up the argument parser for the tool.
     """
     parser = argparse.ArgumentParser(
-        description="Analyzes configuration files against security policies to identify conflicts or violations."
+        description="Detects conflicts between two policy files, and validates the first against the second treated as a JSON Schema when it is a schema."
     )
     parser.add_argument(
         "config_file",
@@ -147,13 +147,61 @@ def validate_config(config_data, policy_data):
         return True
     except jsonschema.exceptions.ValidationError as e:
         logging.error(f"Configuration validation failed: {e}")
-        raise
+        return False
     except jsonschema.exceptions.SchemaError as e:
         logging.error(f"Invalid JSON schema: {e}")
         raise
-    except Exception as e:
-        logging.error(f"An unexpected error occurred during validation: {e}")
-        raise
+
+
+def extract_rules(data):
+    """Return a list of rule dicts from common policy shapes, or None."""
+    if isinstance(data, dict):
+        for key in ("rules", "policy", "policies", "Statement", "statements"):
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        if any(k in data for k in ("action", "Action", "effect", "Effect", "resource", "Resource")):
+            return [data]
+        return None
+    if isinstance(data, list):
+        return data
+    return None
+
+
+def rule_fields(rule):
+    if not isinstance(rule, dict):
+        return None
+    def pick(*names):
+        for n in names:
+            if n in rule:
+                v = rule[n]
+                return v[0] if isinstance(v, list) and v else v
+        return None
+    action = pick("action", "Action")
+    resource = pick("resource", "Resource")
+    effect = pick("effect", "Effect", "decision")
+    name = pick("name", "id", "Name", "Id") or "unnamed"
+    if action is None or resource is None or effect is None:
+        return None
+    effect_norm = str(effect).strip().lower()
+    if effect_norm in ("allow", "permit"):
+        effect_norm = "allow"
+    elif effect_norm in ("deny", "block", "drop"):
+        effect_norm = "deny"
+    else:
+        return None
+    return {"name": str(name), "action": str(action), "resource": str(resource), "effect": effect_norm}
+
+
+def detect_conflicts(rules_a, rules_b):
+    conflicts = []
+    fa = [r for r in (rule_fields(x) for x in rules_a) if r]
+    fb = [r for r in (rule_fields(x) for x in rules_b) if r]
+    for a in fa:
+        for b in fb:
+            if a["action"] == b["action"] and a["resource"] == b["resource"] and a["effect"] != b["effect"]:
+                conflicts.append((a, b))
+    return conflicts, len(fa), len(fb)
+
 
 
 def main():
@@ -171,13 +219,32 @@ def main():
         config_data = load_config(args.config_file)
         policy_data = load_policy(args.policy_file)
 
-        # Validate the configuration against the policy.
+        if config_data is None or config_data == {} or config_data == []:
+            logging.error("First file is empty: nothing was checked.")
+            sys.exit(2)
+        if policy_data is None or policy_data == {} or policy_data == []:
+            logging.error("Second file is empty: nothing was checked.")
+            sys.exit(2)
+        rules_a = extract_rules(config_data)
+        rules_b = extract_rules(policy_data)
+        if rules_a is not None and rules_b is not None:
+            conflicts, count_a, count_b = detect_conflicts(rules_a, rules_b)
+            if count_a == 0 or count_b == 0:
+                logging.error("Policy files held no usable rules (need action, resource, and effect): conflict check not performed.")
+                sys.exit(2)
+            if conflicts:
+                for a, b in conflicts:
+                    print(f"Conflict: rule '{a['name']}' ({a['effect']}) and rule '{b['name']}' ({b['effect']}) overlap on action {a['action']} and resource {a['resource']}.")
+                sys.exit(1)
+            print("No conflicts found between the two policy files.")
+            return
         if validate_config(config_data, policy_data):
             logging.info("Configuration is valid according to the policy.")
             print("Configuration is valid according to the policy.")
         else:
             logging.warning("Configuration is invalid according to the policy.")
             print("Configuration is invalid according to the policy.")
+            sys.exit(1)
 
     except FileNotFoundError:
         logging.error("One or more files not found. Exiting.")
