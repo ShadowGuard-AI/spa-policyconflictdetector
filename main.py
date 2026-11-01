@@ -56,6 +56,9 @@ def load_config(config_file):
     """
     try:
         with open(config_file, "r") as f:
+            # The extension decides the parser and the check is case
+            # sensitive, so a file named CONFIG.JSON is rejected as an
+            # unsupported format even though its contents would parse.
             if config_file.endswith(".json"):
                 config_data = json.load(f)
             elif config_file.endswith(".yaml") or config_file.endswith(".yml"):
@@ -133,6 +136,12 @@ def validate_config(config_data, policy_data):
         jsonschema.exceptions.SchemaError: If the schema itself is invalid.
         Exception: For any other unexpected errors during validation.
     """
+    # This function never returns False. Validation either passes or
+    # raises, so the invalid branch in main is dead code and every
+    # failure arrives there as an exception instead.
+    # The policy is always used as a JSON Schema, whatever form the
+    # file took. A YAML rules file parses fine in load_policy and then
+    # fails here as a malformed schema, not as a list of rules.
     try:
         jsonschema.validate(instance=config_data, schema=policy_data)
         return True
