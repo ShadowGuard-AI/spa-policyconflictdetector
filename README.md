@@ -20,4 +20,4 @@ An empty first or second file is a not-performed run: it exits non-zero and prin
 - `--log_level`: Set the logging level. Defaults to INFO.
 
 ## License
-Copyright (c) ShadowGuardAI
+MIT License. See LICENSE.
